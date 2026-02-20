@@ -1,5 +1,6 @@
 import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -156,6 +157,76 @@ export class RecordsService {
     return [...this.workshops.values()];
   }
 
+  async decodeVin(vin: string) {
+    const normalizedVin = vin.trim().toUpperCase();
+    if (normalizedVin.length < 11) {
+      throw new BadRequestException('VIN troppo corto per il decode automatico.');
+    }
+
+    const endpoint = `https://vpic.nhtsa.dot.gov/api/vehicles/DecodeVinValuesExtended/${encodeURIComponent(normalizedVin)}?format=json`;
+    let response: Response;
+    try {
+      response = await fetch(endpoint);
+    } catch {
+      throw new BadRequestException('Lookup VIN non raggiungibile.');
+    }
+
+    if (!response.ok) {
+      throw new BadRequestException('Lookup VIN non disponibile in questo momento.');
+    }
+
+    const payload = (await response.json()) as {
+      Results?: Array<{ Make?: string; Model?: string; ModelYear?: string; ErrorCode?: string }>;
+    };
+    const first = payload.Results?.[0];
+
+    const make = first?.Make?.trim() ?? '';
+    const model = first?.Model?.trim() ?? '';
+    const modelYear = Number(first?.ModelYear ?? 0) || undefined;
+
+    return {
+      vin: normalizedVin,
+      found: Boolean(make || model),
+      make,
+      model,
+      year: modelYear,
+    };
+  }
+
+  async hashFromUri(uri: string) {
+    const normalizedUri = uri.trim();
+    if (!normalizedUri) {
+      throw new BadRequestException('URI documento mancante.');
+    }
+
+    const resolvedUri = this.normalizeDocumentUri(normalizedUri);
+    let response: Response;
+    try {
+      response = await fetch(resolvedUri, {
+        redirect: 'follow',
+        headers: {
+          'User-Agent': 'iota-auto-passport/1.0',
+        },
+      });
+    } catch {
+      throw new BadRequestException('Documento non raggiungibile dall’URI indicato.');
+    }
+
+    if (!response.ok) {
+      throw new BadRequestException(`Impossibile scaricare il documento (status ${response.status}).`);
+    }
+
+    const buffer = Buffer.from(await response.arrayBuffer());
+    const hash = createHash('sha256').update(buffer).digest('hex');
+
+    return {
+      uri: normalizedUri,
+      resolvedUri,
+      notesHash: `0x${hash}`,
+      sizeBytes: buffer.length,
+    };
+  }
+
   getConfig() {
     return this.iota.getConfigSnapshot();
   }
@@ -201,5 +272,29 @@ export class RecordsService {
   private buildWorkshopDid(workshopAddress: string): string {
     const network = this.config.get<string>('IOTA_NETWORK', 'testnet').toLowerCase();
     return `did:iota:${network}:${workshopAddress}`;
+  }
+
+  private normalizeDocumentUri(uri: string): string {
+    let parsed: URL;
+    try {
+      parsed = new URL(uri);
+    } catch {
+      throw new BadRequestException('URI documento non valida.');
+    }
+
+    const isGoogleDrive = parsed.hostname.includes('drive.google.com');
+    if (!isGoogleDrive) {
+      return uri;
+    }
+
+    const fromQuery = parsed.searchParams.get('id');
+    const fromPath = parsed.pathname.match(/\/file\/d\/([^/]+)/)?.[1];
+    const fileId = fromQuery || fromPath;
+
+    if (!fileId) {
+      return uri;
+    }
+
+    return `https://drive.google.com/uc?export=download&id=${fileId}`;
   }
 }

@@ -31,6 +31,21 @@ export interface InterventionPayload {
   recordedAtMs: number;
 }
 
+export interface VinDecodeResult {
+  vin: string;
+  found: boolean;
+  make: string;
+  model: string;
+  year?: number;
+}
+
+export interface HashFromUriResult {
+  uri: string;
+  resolvedUri: string;
+  notesHash: string;
+  sizeBytes: number;
+}
+
 export const fetchVehicles = async () => (await api.get('/vehicles')).data;
 export const fetchVehicleByVin = async (vin: string) => (await api.get(`/vehicles/${vin}`)).data;
 export const fetchWorkshops = async () => (await api.get('/workshops')).data;
@@ -42,3 +57,9 @@ export const createVehicle = async (payload: VehiclePayload) => (await api.post(
 
 export const addIntervention = async (passportId: string, payload: InterventionPayload) =>
   (await api.post(`/vehicles/${passportId}/interventions`, payload)).data;
+
+export const decodeVin = async (vin: string): Promise<VinDecodeResult> =>
+  (await api.get(`/utils/vin/${encodeURIComponent(vin)}`)).data;
+
+export const hashFromUri = async (uri: string): Promise<HashFromUriResult> =>
+  (await api.post('/utils/hash-from-uri', { uri })).data;

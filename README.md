@@ -104,6 +104,9 @@ Dashboard con 4 aree:
 - Wallet connect IOTA integrato (`@iota/dapp-kit`)
 - `Address Officina` e `Public Key` vengono auto-compilati dal wallet connesso
 - `DID` viene auto-generato con convenzione `did:iota:<network>:<address>` (modificabile da UI)
+- `Marca` e `Modello` vengono auto-risolti dal VIN (servizio decode VIN)
+- in notarizzazione: hash documento, firma digitale wallet e timestamp sono auto-generati al submit
+- supporto URI documento anche da Google Drive (file accessibile via link condiviso)
 
 ## Setup locale
 

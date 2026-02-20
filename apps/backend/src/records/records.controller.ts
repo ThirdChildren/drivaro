@@ -2,6 +2,7 @@ import { Body, Controller, Get, Inject, Param, Post } from '@nestjs/common';
 
 import { AddInterventionDto } from './dto/add-intervention.dto';
 import { CreateVehicleDto } from './dto/create-vehicle.dto';
+import { HashFromUriDto } from './dto/hash-from-uri.dto';
 import { PublishContractDto } from './dto/publish-contract.dto';
 import { RegisterWorkshopDto } from './dto/register-workshop.dto';
 import { RecordsService } from './records.service';
@@ -28,6 +29,16 @@ export class RecordsController {
   @Get('workshops')
   listWorkshops() {
     return this.records.listWorkshops();
+  }
+
+  @Get('utils/vin/:vin')
+  decodeVin(@Param('vin') vin: string) {
+    return this.records.decodeVin(vin);
+  }
+
+  @Post('utils/hash-from-uri')
+  hashFromUri(@Body() dto: HashFromUriDto) {
+    return this.records.hashFromUri(dto.uri);
   }
 
   @Post('vehicles')

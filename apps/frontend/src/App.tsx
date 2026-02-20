@@ -1,10 +1,16 @@
-import { ConnectButton, useCurrentAccount, useCurrentWallet, useDisconnectWallet } from '@iota/dapp-kit';
-import AccountBalanceWalletRounded from '@mui/icons-material/AccountBalanceWalletRounded';
-import DirectionsCarRounded from '@mui/icons-material/DirectionsCarRounded';
-import EngineeringRounded from '@mui/icons-material/EngineeringRounded';
-import FactCheckRounded from '@mui/icons-material/FactCheckRounded';
-import LogoutRounded from '@mui/icons-material/LogoutRounded';
-import TimelineRounded from '@mui/icons-material/TimelineRounded';
+import {
+  ConnectButton,
+  useCurrentAccount,
+  useCurrentWallet,
+  useDisconnectWallet,
+  useSignPersonalMessage,
+} from "@iota/dapp-kit";
+import AccountBalanceWalletRounded from "@mui/icons-material/AccountBalanceWalletRounded";
+import DirectionsCarRounded from "@mui/icons-material/DirectionsCarRounded";
+import EngineeringRounded from "@mui/icons-material/EngineeringRounded";
+import FactCheckRounded from "@mui/icons-material/FactCheckRounded";
+import LogoutRounded from "@mui/icons-material/LogoutRounded";
+import TimelineRounded from "@mui/icons-material/TimelineRounded";
 import {
   Alert,
   Box,
@@ -23,17 +29,19 @@ import {
   Stack,
   TextField,
   Typography,
-} from '@mui/material';
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+} from "@mui/material";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 
 import {
   addIntervention,
   createVehicle,
+  decodeVin,
   fetchVehicleByVin,
   fetchVehicles,
   fetchWorkshops,
+  hashFromUri,
   registerWorkshop,
-} from './api';
+} from "./api";
 
 interface VehicleSummary {
   vin: string;
@@ -74,42 +82,41 @@ interface VehicleHistory {
 }
 
 type AppSection =
-  | 'onboarding'
-  | 'mint'
-  | 'intervention'
-  | 'verify'
-  | 'workshops'
-  | 'passports';
+  | "onboarding"
+  | "mint"
+  | "intervention"
+  | "verify"
+  | "workshops"
+  | "passports";
 
 const initialWorkshop = {
-  workshopAddress: '',
-  did: '',
-  publicKeyMultibase: '',
+  workshopAddress: "",
+  did: "",
+  publicKeyMultibase: "",
 };
 
 const initialVehicle = {
-  vin: '',
-  make: '',
-  model: '',
+  vin: "",
+  make: "",
+  model: "",
   year: new Date().getFullYear(),
-  ownerAddress: '',
+  ownerAddress: "",
 };
 
 const initialIntervention = {
-  passportId: '',
+  passportId: "",
   odometerKm: 0,
-  workType: '',
-  notesHash: '',
-  evidenceUri: '',
-  workshopAddress: '',
-  workshopSignature: '',
-  recordedAtMs: Date.now(),
+  workType: "",
+  evidenceUri: "",
+  workshopAddress: "",
 };
 
-const iotaNetwork = (import.meta.env.VITE_IOTA_NETWORK ?? 'testnet').toLowerCase();
+const iotaNetwork = (
+  import.meta.env.VITE_IOTA_NETWORK ?? "testnet"
+).toLowerCase();
 
 function bytesToMultibaseBase64(bytes: ArrayLike<number>): string {
-  let binary = '';
+  let binary = "";
   for (let i = 0; i < bytes.length; i += 1) {
     binary += String.fromCharCode(bytes[i]);
   }
@@ -134,25 +141,36 @@ function formatDate(isoDate: string): string {
     return isoDate;
   }
 
-  return date.toLocaleString('it-IT');
+  return date.toLocaleString("it-IT");
 }
 
 export default function App() {
   const currentAccount = useCurrentAccount();
   const currentWallet = useCurrentWallet();
   const disconnectWallet = useDisconnectWallet();
+  const signPersonalMessage = useSignPersonalMessage();
 
   const [vehicles, setVehicles] = useState<VehicleSummary[]>([]);
   const [workshops, setWorkshops] = useState<WorkshopSummary[]>([]);
   const [history, setHistory] = useState<VehicleHistory | null>(null);
-  const [searchVin, setSearchVin] = useState('');
+  const [searchVin, setSearchVin] = useState("");
 
   const [workshopForm, setWorkshopForm] = useState(initialWorkshop);
   const [vehicleForm, setVehicleForm] = useState(initialVehicle);
   const [interventionForm, setInterventionForm] = useState(initialIntervention);
-  const [activeSection, setActiveSection] = useState<AppSection>('onboarding');
-  const [workshopQuery, setWorkshopQuery] = useState('');
-  const [passportQuery, setPassportQuery] = useState('');
+  const [activeSection, setActiveSection] = useState<AppSection>("onboarding");
+  const [workshopQuery, setWorkshopQuery] = useState("");
+  const [passportQuery, setPassportQuery] = useState("");
+  const [vinLookupState, setVinLookupState] = useState<
+    "idle" | "loading" | "done" | "error"
+  >("idle");
+  const [lastDecodedVin, setLastDecodedVin] = useState("");
+  const [processingIntervention, setProcessingIntervention] = useState(false);
+  const [autoInterventionInfo, setAutoInterventionInfo] = useState<{
+    notesHash: string;
+    recordedAtMs: number;
+    signature: string;
+  } | null>(null);
 
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -171,7 +189,7 @@ export default function App() {
 
     return workshops.filter((workshop) =>
       [workshop.workshopAddress, workshop.did, workshop.publicKeyMultibase]
-        .join(' ')
+        .join(" ")
         .toLowerCase()
         .includes(query),
     );
@@ -185,7 +203,7 @@ export default function App() {
 
     return vehicles.filter((vehicle) =>
       [vehicle.vin, vehicle.make, vehicle.model, vehicle.passportId]
-        .join(' ')
+        .join(" ")
         .toLowerCase()
         .includes(query),
     );
@@ -193,11 +211,14 @@ export default function App() {
 
   const loadDashboard = async () => {
     try {
-      const [vehicleList, workshopList] = await Promise.all([fetchVehicles(), fetchWorkshops()]);
+      const [vehicleList, workshopList] = await Promise.all([
+        fetchVehicles(),
+        fetchWorkshops(),
+      ]);
       setVehicles(vehicleList);
       setWorkshops(workshopList);
     } catch {
-      setError('Impossibile caricare la dashboard dal backend.');
+      setError("Impossibile caricare la dashboard dal backend.");
     }
   };
 
@@ -218,7 +239,10 @@ export default function App() {
       ...prev,
       workshopAddress: autoAddress,
       publicKeyMultibase: autoPublicKey,
-      did: prev.did.trim() && !prev.did.startsWith('did:iota:') ? prev.did : autoDid,
+      did:
+        prev.did.trim() && !prev.did.startsWith("did:iota:")
+          ? prev.did
+          : autoDid,
     }));
 
     setVehicleForm((prev) => ({
@@ -234,12 +258,12 @@ export default function App() {
 
   useEffect(() => {
     const normalizedAddress = workshopForm.workshopAddress.trim().toLowerCase();
-    if (!normalizedAddress.startsWith('0x') || normalizedAddress.length < 4) {
+    if (!normalizedAddress.startsWith("0x") || normalizedAddress.length < 4) {
       return;
     }
 
     setWorkshopForm((prev) => {
-      if (prev.did.trim() && !prev.did.startsWith('did:iota:')) {
+      if (prev.did.trim() && !prev.did.startsWith("did:iota:")) {
         return prev;
       }
 
@@ -250,12 +274,52 @@ export default function App() {
     });
   }, [workshopForm.workshopAddress]);
 
+  useEffect(() => {
+    if (vehicleForm.vin.trim().length >= 17) {
+      return;
+    }
+
+    setVinLookupState("idle");
+  }, [vehicleForm.vin]);
+
+  useEffect(() => {
+    const normalizedVin = vehicleForm.vin.trim().toUpperCase();
+    if (normalizedVin.length < 17 || normalizedVin === lastDecodedVin) {
+      return;
+    }
+
+    const timeout = setTimeout(async () => {
+      setVinLookupState("loading");
+      try {
+        const result = await decodeVin(normalizedVin);
+        if (result.found) {
+          setVehicleForm((prev) => ({
+            ...prev,
+            make: result.make || prev.make,
+            model: result.model || prev.model,
+            year: result.year ?? prev.year,
+          }));
+          setVinLookupState("done");
+        } else {
+          setVinLookupState("error");
+        }
+        setLastDecodedVin(normalizedVin);
+      } catch {
+        setVinLookupState("error");
+      }
+    }, 500);
+
+    return () => clearTimeout(timeout);
+  }, [vehicleForm.vin, lastDecodedVin]);
+
   const onWorkshopSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setError(null);
     try {
       const onboardedWorkshop = await registerWorkshop(workshopForm);
-      setMessage('Officina registrata on-chain e pronta alla firma interventi.');
+      setMessage(
+        "Officina registrata on-chain e pronta alla firma interventi.",
+      );
       setWorkshops((prev) => {
         const withoutDuplicate = prev.filter(
           (workshop) =>
@@ -264,10 +328,12 @@ export default function App() {
         );
         return [...withoutDuplicate, onboardedWorkshop];
       });
-      setActiveSection('workshops');
+      setActiveSection("workshops");
       setWorkshopForm(initialWorkshop);
     } catch {
-      setError('Registrazione officina fallita. Controlla package/registry ID e wallet CLI.');
+      setError(
+        "Registrazione officina fallita. Controlla package/registry ID e wallet CLI.",
+      );
     }
   };
 
@@ -276,35 +342,81 @@ export default function App() {
     setError(null);
     try {
       await createVehicle(vehicleForm);
-      setMessage('Passport veicolo creato e tokenizzato su IOTA.');
-      setActiveSection('passports');
+      setMessage("Passport veicolo creato e tokenizzato su IOTA.");
+      setActiveSection("passports");
       setVehicleForm(initialVehicle);
       await loadDashboard();
     } catch {
-      setError('Creazione passport fallita.');
+      setError("Creazione passport fallita.");
     }
   };
 
   const onInterventionSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setError(null);
+    setAutoInterventionInfo(null);
 
+    if (!currentAccount || !currentWallet.isConnected) {
+      setError("Per notarizzare l’intervento collega prima il wallet IOTA.");
+      return;
+    }
+
+    const normalizedWorkshopAddress = interventionForm.workshopAddress
+      .trim()
+      .toLowerCase();
+    if (normalizedWorkshopAddress !== currentAccount.address.toLowerCase()) {
+      setError(
+        "L’indirizzo officina deve coincidere con l’account wallet connesso per firmare.",
+      );
+      return;
+    }
+
+    setProcessingIntervention(true);
     try {
+      const recordedAtMs = Date.now();
+      const hashResult = await hashFromUri(interventionForm.evidenceUri);
+
+      const payloadToSign = JSON.stringify({
+        passportId: interventionForm.passportId,
+        odometerKm: Number(interventionForm.odometerKm),
+        workType: interventionForm.workType,
+        notesHash: hashResult.notesHash,
+        evidenceUri: interventionForm.evidenceUri,
+        workshopAddress: normalizedWorkshopAddress,
+        recordedAtMs,
+      });
+
+      const signatureResult = await signPersonalMessage.mutateAsync({
+        account: currentAccount,
+        message: new TextEncoder().encode(payloadToSign),
+      });
+
       await addIntervention(interventionForm.passportId, {
         odometerKm: Number(interventionForm.odometerKm),
         workType: interventionForm.workType,
-        notesHash: interventionForm.notesHash,
+        notesHash: hashResult.notesHash,
         evidenceUri: interventionForm.evidenceUri,
-        workshopAddress: interventionForm.workshopAddress,
-        workshopSignature: interventionForm.workshopSignature,
-        recordedAtMs: Number(interventionForm.recordedAtMs),
+        workshopAddress: normalizedWorkshopAddress,
+        workshopSignature: `base64:${signatureResult.signature}`,
+        recordedAtMs,
       });
 
-      setMessage('Intervento notarizzato: chilometraggio bloccato in sequenza crescente.');
-      setInterventionForm({ ...initialIntervention, recordedAtMs: Date.now() });
+      setAutoInterventionInfo({
+        notesHash: hashResult.notesHash,
+        recordedAtMs,
+        signature: `base64:${signatureResult.signature}`,
+      });
+      setMessage(
+        "Intervento notarizzato: chilometraggio bloccato in sequenza crescente.",
+      );
+      setInterventionForm(initialIntervention);
       await loadDashboard();
     } catch {
-      setError('Registrazione intervento fallita. Verifica autorizzazione officina e km.');
+      setError(
+        "Registrazione intervento fallita. Verifica autorizzazione officina e km.",
+      );
+    } finally {
+      setProcessingIntervention(false);
     }
   };
 
@@ -318,7 +430,7 @@ export default function App() {
       setMessage(null);
     } catch {
       setHistory(null);
-      setError('VIN non trovato o cronologia non disponibile.');
+      setError("VIN non trovato o cronologia non disponibile.");
     }
   };
 
@@ -350,36 +462,38 @@ export default function App() {
               <Button
                 fullWidth
                 startIcon={<EngineeringRounded />}
-                variant={activeSection === 'onboarding' ? 'contained' : 'text'}
-                onClick={() => setActiveSection('onboarding')}
-                sx={{ justifyContent: 'flex-start', textTransform: 'none' }}
+                variant={activeSection === "onboarding" ? "contained" : "text"}
+                onClick={() => setActiveSection("onboarding")}
+                sx={{ justifyContent: "flex-start", textTransform: "none" }}
               >
                 Onboarding Officina
               </Button>
               <Button
                 fullWidth
                 startIcon={<TimelineRounded />}
-                variant={activeSection === 'mint' ? 'contained' : 'text'}
-                color={activeSection === 'mint' ? 'secondary' : 'inherit'}
-                onClick={() => setActiveSection('mint')}
-                sx={{ justifyContent: 'flex-start', textTransform: 'none' }}
+                variant={activeSection === "mint" ? "contained" : "text"}
+                color={activeSection === "mint" ? "secondary" : "inherit"}
+                onClick={() => setActiveSection("mint")}
+                sx={{ justifyContent: "flex-start", textTransform: "none" }}
               >
                 Mint Passport
               </Button>
               <Button
                 fullWidth
                 startIcon={<FactCheckRounded />}
-                variant={activeSection === 'intervention' ? 'contained' : 'text'}
-                onClick={() => setActiveSection('intervention')}
-                sx={{ justifyContent: 'flex-start', textTransform: 'none' }}
+                variant={
+                  activeSection === "intervention" ? "contained" : "text"
+                }
+                onClick={() => setActiveSection("intervention")}
+                sx={{ justifyContent: "flex-start", textTransform: "none" }}
               >
                 Notarizza Intervento
               </Button>
               <Button
                 fullWidth
-                variant={activeSection === 'verify' ? 'contained' : 'text'}
-                onClick={() => setActiveSection('verify')}
-                sx={{ justifyContent: 'flex-start', textTransform: 'none' }}
+                variant={activeSection === "verify" ? "contained" : "text"}
+                onClick={() => setActiveSection("verify")}
+                sx={{ justifyContent: "flex-start", textTransform: "none" }}
               >
                 Verifica VIN
               </Button>
@@ -391,19 +505,19 @@ export default function App() {
               </Typography>
               <Button
                 fullWidth
-                variant={activeSection === 'workshops' ? 'contained' : 'text'}
-                onClick={() => setActiveSection('workshops')}
-                sx={{ justifyContent: 'space-between', textTransform: 'none' }}
+                variant={activeSection === "workshops" ? "contained" : "text"}
+                onClick={() => setActiveSection("workshops")}
+                sx={{ justifyContent: "space-between", textTransform: "none" }}
               >
                 Officine
                 <Chip size="small" label={workshops.length} />
               </Button>
               <Button
                 fullWidth
-                variant={activeSection === 'passports' ? 'contained' : 'text'}
-                color={activeSection === 'passports' ? 'secondary' : 'inherit'}
-                onClick={() => setActiveSection('passports')}
-                sx={{ justifyContent: 'space-between', textTransform: 'none' }}
+                variant={activeSection === "passports" ? "contained" : "text"}
+                color={activeSection === "passports" ? "secondary" : "inherit"}
+                onClick={() => setActiveSection("passports")}
+                sx={{ justifyContent: "space-between", textTransform: "none" }}
               >
                 Passport
                 <Chip size="small" label={vehicles.length} />
@@ -414,46 +528,60 @@ export default function App() {
           <Stack spacing={3}>
             <Card className="glass shadow-card">
               <CardContent>
-                <Stack direction={{ xs: 'column', md: 'row' }} spacing={3} alignItems="center">
+                <Stack
+                  direction={{ xs: "column", md: "row" }}
+                  spacing={3}
+                  alignItems="center"
+                >
                   <Box className="rounded-2xl bg-gradient-to-br from-accent to-teal-900 p-3 text-white">
                     <DirectionsCarRounded fontSize="large" />
                   </Box>
                   <Box flex={1}>
                     <Typography variant="h3">IOTA Auto Passport</Typography>
                     <Typography variant="body1" className="mt-2">
-                      Diario manutenzione non cancellabile: officina firma, hash intervento,
-                      cronologia verificabile prima dell’acquisto.
+                      Diario manutenzione non cancellabile: officina firma, hash
+                      intervento, cronologia verificabile prima dell’acquisto.
                     </Typography>
                   </Box>
                   <Stack direction="row" spacing={1}>
-                    <Chip label={`${workshopCount} officine`} variant="outlined" />
+                    <Chip
+                      label={`${workshopCount} officine`}
+                      variant="outlined"
+                    />
                     <Chip label={`${vehicleCount} veicoli`} color="primary" />
-                    <Chip label={`${interventionCount} interventi`} color="secondary" />
+                    <Chip
+                      label={`${interventionCount} interventi`}
+                      color="secondary"
+                    />
                   </Stack>
                 </Stack>
               </CardContent>
             </Card>
 
             {(message || error) && (
-              <Alert severity={error ? 'error' : 'success'}>{error ?? message}</Alert>
+              <Alert severity={error ? "error" : "success"}>
+                {error ?? message}
+              </Alert>
             )}
 
-            {activeSection === 'onboarding' && (
+            {activeSection === "onboarding" && (
               <Card className="shadow-card">
                 <CardContent>
                   <Stack spacing={2}>
                     <Stack direction="row" spacing={1} alignItems="center">
                       <EngineeringRounded color="primary" />
-                      <Typography variant="h6">Onboarding Officina (Identity)</Typography>
+                      <Typography variant="h6">
+                        Onboarding Officina (Identity)
+                      </Typography>
                     </Stack>
                     <Typography variant="body2" color="text.secondary">
-                      Wallet connect auto-compila address, DID e public key. Il DID resta editabile
-                      se vuoi una convenzione diversa.
+                      Wallet connect auto-compila address, DID e public key. Il
+                      DID resta editabile se vuoi una convenzione diversa.
                     </Typography>
                     <Stack
-                      direction={{ xs: 'column', sm: 'row' }}
+                      direction={{ xs: "column", sm: "row" }}
                       spacing={1}
-                      alignItems={{ xs: 'stretch', sm: 'center' }}
+                      alignItems={{ xs: "stretch", sm: "center" }}
                     >
                       <ConnectButton connectText="Connetti Wallet IOTA" />
                       {currentWallet.isConnected && (
@@ -468,10 +596,19 @@ export default function App() {
                       )}
                     </Stack>
                     <Stack direction="row" spacing={1} flexWrap="wrap">
-                      <Chip icon={<AccountBalanceWalletRounded />} label={`Rete: ${iotaNetwork}`} />
                       <Chip
-                        color={currentWallet.isConnected ? 'success' : 'default'}
-                        label={currentWallet.isConnected ? 'Wallet connesso' : 'Wallet non connesso'}
+                        icon={<AccountBalanceWalletRounded />}
+                        label={`Rete: ${iotaNetwork}`}
+                      />
+                      <Chip
+                        color={
+                          currentWallet.isConnected ? "success" : "default"
+                        }
+                        label={
+                          currentWallet.isConnected
+                            ? "Wallet connesso"
+                            : "Wallet non connesso"
+                        }
                       />
                     </Stack>
                     <form className="space-y-3" onSubmit={onWorkshopSubmit}>
@@ -480,25 +617,42 @@ export default function App() {
                         label="Address Officina"
                         value={workshopForm.workshopAddress}
                         onChange={(event) =>
-                          setWorkshopForm((prev) => ({ ...prev, workshopAddress: event.target.value }))
+                          setWorkshopForm((prev) => ({
+                            ...prev,
+                            workshopAddress: event.target.value,
+                          }))
                         }
                       />
                       <TextField
                         fullWidth
                         label="DID"
                         value={workshopForm.did}
-                        helperText={currentAccount ? 'Generato dal wallet, puoi personalizzarlo.' : ''}
+                        helperText={
+                          currentAccount
+                            ? "Generato dal wallet, puoi personalizzarlo."
+                            : ""
+                        }
                         onChange={(event) =>
-                          setWorkshopForm((prev) => ({ ...prev, did: event.target.value }))
+                          setWorkshopForm((prev) => ({
+                            ...prev,
+                            did: event.target.value,
+                          }))
                         }
                       />
                       <TextField
                         fullWidth
                         label="Public Key (multibase)"
                         value={workshopForm.publicKeyMultibase}
-                        helperText={currentAccount ? 'Derivata dalla public key del wallet.' : ''}
+                        helperText={
+                          currentAccount
+                            ? "Derivata dalla public key del wallet."
+                            : ""
+                        }
                         onChange={(event) =>
-                          setWorkshopForm((prev) => ({ ...prev, publicKeyMultibase: event.target.value }))
+                          setWorkshopForm((prev) => ({
+                            ...prev,
+                            publicKeyMultibase: event.target.value,
+                          }))
                         }
                       />
                       <Button type="submit" fullWidth variant="contained">
@@ -510,30 +664,50 @@ export default function App() {
               </Card>
             )}
 
-            {activeSection === 'mint' && (
+            {activeSection === "mint" && (
               <Card className="shadow-card">
                 <CardContent>
                   <Stack spacing={2}>
                     <Stack direction="row" spacing={1} alignItems="center">
                       <TimelineRounded color="secondary" />
-                      <Typography variant="h6">Mint Passport Veicolo</Typography>
+                      <Typography variant="h6">
+                        Mint Passport Veicolo
+                      </Typography>
                     </Stack>
                     <form className="space-y-3" onSubmit={onVehicleSubmit}>
                       <TextField
                         fullWidth
                         label="VIN"
                         value={vehicleForm.vin}
+                        helperText={
+                          vinLookupState === "loading"
+                            ? "Ricerca marca/modello in corso..."
+                            : vinLookupState === "done"
+                              ? "Marca e modello compilati automaticamente dal VIN."
+                              : vinLookupState === "error"
+                                ? "Lookup VIN non disponibile o VIN non riconosciuto."
+                                : "Inserisci un VIN completo (17 caratteri) per l’autofill."
+                        }
                         onChange={(event) =>
-                          setVehicleForm((prev) => ({ ...prev, vin: event.target.value.toUpperCase() }))
+                          setVehicleForm((prev) => ({
+                            ...prev,
+                            vin: event.target.value.toUpperCase(),
+                          }))
                         }
                       />
-                      <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
+                      <Stack
+                        direction={{ xs: "column", sm: "row" }}
+                        spacing={2}
+                      >
                         <TextField
                           fullWidth
                           label="Marca"
                           value={vehicleForm.make}
                           onChange={(event) =>
-                            setVehicleForm((prev) => ({ ...prev, make: event.target.value }))
+                            setVehicleForm((prev) => ({
+                              ...prev,
+                              make: event.target.value,
+                            }))
                           }
                         />
                         <TextField
@@ -541,18 +715,27 @@ export default function App() {
                           label="Modello"
                           value={vehicleForm.model}
                           onChange={(event) =>
-                            setVehicleForm((prev) => ({ ...prev, model: event.target.value }))
+                            setVehicleForm((prev) => ({
+                              ...prev,
+                              model: event.target.value,
+                            }))
                           }
                         />
                       </Stack>
-                      <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
+                      <Stack
+                        direction={{ xs: "column", sm: "row" }}
+                        spacing={2}
+                      >
                         <TextField
                           fullWidth
                           type="number"
                           label="Anno"
                           value={vehicleForm.year}
                           onChange={(event) =>
-                            setVehicleForm((prev) => ({ ...prev, year: Number(event.target.value) }))
+                            setVehicleForm((prev) => ({
+                              ...prev,
+                              year: Number(event.target.value),
+                            }))
                           }
                         />
                         <TextField
@@ -560,11 +743,19 @@ export default function App() {
                           label="Owner Address"
                           value={vehicleForm.ownerAddress}
                           onChange={(event) =>
-                            setVehicleForm((prev) => ({ ...prev, ownerAddress: event.target.value }))
+                            setVehicleForm((prev) => ({
+                              ...prev,
+                              ownerAddress: event.target.value,
+                            }))
                           }
                         />
                       </Stack>
-                      <Button type="submit" fullWidth variant="contained" color="secondary">
+                      <Button
+                        type="submit"
+                        fullWidth
+                        variant="contained"
+                        color="secondary"
+                      >
                         Crea Passport
                       </Button>
                     </form>
@@ -573,7 +764,7 @@ export default function App() {
               </Card>
             )}
 
-            {activeSection === 'intervention' && (
+            {activeSection === "intervention" && (
               <Card className="shadow-card">
                 <CardContent>
                   <Stack spacing={2}>
@@ -582,13 +773,19 @@ export default function App() {
                       <Typography variant="h6">Notarizza Intervento</Typography>
                     </Stack>
                     <form className="space-y-3" onSubmit={onInterventionSubmit}>
-                      <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
+                      <Stack
+                        direction={{ xs: "column", md: "row" }}
+                        spacing={2}
+                      >
                         <TextField
                           fullWidth
                           label="Passport ID"
                           value={interventionForm.passportId}
                           onChange={(event) =>
-                            setInterventionForm((prev) => ({ ...prev, passportId: event.target.value }))
+                            setInterventionForm((prev) => ({
+                              ...prev,
+                              passportId: event.target.value,
+                            }))
                           }
                         />
                         <TextField
@@ -604,31 +801,36 @@ export default function App() {
                           }
                         />
                       </Stack>
-                      <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
+                      <Stack
+                        direction={{ xs: "column", md: "row" }}
+                        spacing={2}
+                      >
                         <TextField
                           fullWidth
                           label="Tipo Intervento"
                           value={interventionForm.workType}
                           onChange={(event) =>
-                            setInterventionForm((prev) => ({ ...prev, workType: event.target.value }))
-                          }
-                        />
-                        <TextField
-                          fullWidth
-                          label="Hash Report"
-                          value={interventionForm.notesHash}
-                          onChange={(event) =>
-                            setInterventionForm((prev) => ({ ...prev, notesHash: event.target.value }))
+                            setInterventionForm((prev) => ({
+                              ...prev,
+                              workType: event.target.value,
+                            }))
                           }
                         />
                       </Stack>
-                      <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
+                      <Stack
+                        direction={{ xs: "column", md: "row" }}
+                        spacing={2}
+                      >
                         <TextField
                           fullWidth
                           label="Evidence URI (IPFS/S3)"
+                          helperText="Supporta anche link Google Drive condivisi (file accessibile)."
                           value={interventionForm.evidenceUri}
                           onChange={(event) =>
-                            setInterventionForm((prev) => ({ ...prev, evidenceUri: event.target.value }))
+                            setInterventionForm((prev) => ({
+                              ...prev,
+                              evidenceUri: event.target.value,
+                            }))
                           }
                         />
                         <TextField
@@ -643,49 +845,78 @@ export default function App() {
                           }
                         />
                       </Stack>
-                      <TextField
-                        fullWidth
-                        label="Firma Digitale Officina"
-                        value={interventionForm.workshopSignature}
-                        onChange={(event) =>
-                          setInterventionForm((prev) => ({
-                            ...prev,
-                            workshopSignature: event.target.value,
-                          }))
-                        }
-                      />
-                      <TextField
-                        fullWidth
-                        type="number"
-                        label="Timestamp ms"
-                        value={interventionForm.recordedAtMs}
-                        onChange={(event) =>
-                          setInterventionForm((prev) => ({
-                            ...prev,
-                            recordedAtMs: Number(event.target.value),
-                          }))
-                        }
-                      />
-                      <Button type="submit" variant="contained">
-                        Registra Intervento
+                      <Button
+                        type="submit"
+                        variant="contained"
+                        disabled={processingIntervention}
+                      >
+                        {processingIntervention
+                          ? "Notarizzazione in corso..."
+                          : "Registra Intervento"}
                       </Button>
                     </form>
+                    {autoInterventionInfo && (
+                      <Card variant="outlined">
+                        <CardContent>
+                          <Stack spacing={0.7}>
+                            <Typography variant="subtitle2">
+                              Dati auto-generati ultimo intervento
+                            </Typography>
+                            <Typography
+                              variant="caption"
+                              color="text.secondary"
+                            >
+                              Hash:{" "}
+                              {compactText(
+                                autoInterventionInfo.notesHash,
+                                20,
+                                14,
+                              )}
+                            </Typography>
+                            <Typography
+                              variant="caption"
+                              color="text.secondary"
+                            >
+                              Firma:{" "}
+                              {compactText(
+                                autoInterventionInfo.signature,
+                                20,
+                                14,
+                              )}
+                            </Typography>
+                            <Typography
+                              variant="caption"
+                              color="text.secondary"
+                            >
+                              Timestamp: {autoInterventionInfo.recordedAtMs}
+                            </Typography>
+                          </Stack>
+                        </CardContent>
+                      </Card>
+                    )}
                   </Stack>
                 </CardContent>
               </Card>
             )}
 
-            {activeSection === 'verify' && (
+            {activeSection === "verify" && (
               <Card className="shadow-card">
                 <CardContent>
                   <Stack spacing={2}>
-                    <Typography variant="h6">Verifica Cronologia (Buyer Check)</Typography>
-                    <form onSubmit={onVerifySubmit} className="flex flex-col gap-3 md:flex-row">
+                    <Typography variant="h6">
+                      Verifica Cronologia (Buyer Check)
+                    </Typography>
+                    <form
+                      onSubmit={onVerifySubmit}
+                      className="flex flex-col gap-3 md:flex-row"
+                    >
                       <TextField
                         fullWidth
                         label="Inserisci VIN"
                         value={searchVin}
-                        onChange={(event) => setSearchVin(event.target.value.toUpperCase())}
+                        onChange={(event) =>
+                          setSearchVin(event.target.value.toUpperCase())
+                        }
                       />
                       <Button type="submit" variant="outlined">
                         Verifica
@@ -695,33 +926,53 @@ export default function App() {
                     {history && (
                       <Stack spacing={2}>
                         <Divider />
-                        <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} alignItems="center">
+                        <Stack
+                          direction={{ xs: "column", md: "row" }}
+                          spacing={2}
+                          alignItems="center"
+                        >
                           <Typography variant="subtitle1">
                             {history.make} {history.model} ({history.year})
                           </Typography>
                           <Chip
-                            label={history.verified ? 'Cronologia coerente' : 'Anomalia rilevata'}
-                            color={history.verified ? 'success' : 'error'}
+                            label={
+                              history.verified
+                                ? "Cronologia coerente"
+                                : "Anomalia rilevata"
+                            }
+                            color={history.verified ? "success" : "error"}
                           />
-                          <Chip label={`Passport: ${history.passportId}`} variant="outlined" />
+                          <Chip
+                            label={`Passport: ${history.passportId}`}
+                            variant="outlined"
+                          />
                         </Stack>
 
                         <Stack spacing={1}>
                           {history.interventions.map((item) => (
-                            <Card key={`${item.seq}-${item.recordedAtMs}`} variant="outlined">
+                            <Card
+                              key={`${item.seq}-${item.recordedAtMs}`}
+                              variant="outlined"
+                            >
                               <CardContent>
                                 <Stack spacing={1}>
                                   <Typography variant="subtitle2">
                                     #{item.seq} - {item.workType}
                                   </Typography>
                                   <Typography variant="body2">
-                                    Km: <strong>{item.odometerKm}</strong> | Officina:{' '}
-                                    {item.workshopAddress}
+                                    Km: <strong>{item.odometerKm}</strong> |
+                                    Officina: {item.workshopAddress}
                                   </Typography>
-                                  <Typography variant="body2" color="text.secondary">
+                                  <Typography
+                                    variant="body2"
+                                    color="text.secondary"
+                                  >
                                     Hash: {item.notesHash}
                                   </Typography>
-                                  <Typography variant="body2" color="text.secondary">
+                                  <Typography
+                                    variant="body2"
+                                    color="text.secondary"
+                                  >
                                     URI: {item.evidenceUri}
                                   </Typography>
                                 </Stack>
@@ -736,13 +987,14 @@ export default function App() {
               </Card>
             )}
 
-            {activeSection === 'workshops' && (
+            {activeSection === "workshops" && (
               <Card className="shadow-card">
                 <CardContent>
                   <Stack spacing={2}>
                     <Typography variant="h6">Officine Onboardate</Typography>
                     <Typography variant="body2" color="text.secondary">
-                      Elenco completo officine registrate. Cerca per address, DID o public key.
+                      Elenco completo officine registrate. Cerca per address,
+                      DID o public key.
                     </Typography>
                     <TextField
                       size="small"
@@ -765,18 +1017,35 @@ export default function App() {
                           {filteredWorkshops.length === 0 && (
                             <TableRow>
                               <TableCell colSpan={4}>
-                                <Typography variant="body2" color="text.secondary">
+                                <Typography
+                                  variant="body2"
+                                  color="text.secondary"
+                                >
                                   Nessuna officina trovata.
                                 </Typography>
                               </TableCell>
                             </TableRow>
                           )}
                           {filteredWorkshops.map((workshop) => (
-                            <TableRow key={`${workshop.workshopAddress}-${workshop.createdAt}`}>
-                              <TableCell>{compactText(workshop.workshopAddress, 12, 10)}</TableCell>
-                              <TableCell>{compactText(workshop.did, 22, 10)}</TableCell>
-                              <TableCell>{compactText(workshop.publicKeyMultibase, 18, 10)}</TableCell>
-                              <TableCell>{formatDate(workshop.createdAt)}</TableCell>
+                            <TableRow
+                              key={`${workshop.workshopAddress}-${workshop.createdAt}`}
+                            >
+                              <TableCell>
+                                {compactText(workshop.workshopAddress, 12, 10)}
+                              </TableCell>
+                              <TableCell>
+                                {compactText(workshop.did, 22, 10)}
+                              </TableCell>
+                              <TableCell>
+                                {compactText(
+                                  workshop.publicKeyMultibase,
+                                  18,
+                                  10,
+                                )}
+                              </TableCell>
+                              <TableCell>
+                                {formatDate(workshop.createdAt)}
+                              </TableCell>
                             </TableRow>
                           ))}
                         </TableBody>
@@ -787,13 +1056,14 @@ export default function App() {
               </Card>
             )}
 
-            {activeSection === 'passports' && (
+            {activeSection === "passports" && (
               <Card className="shadow-card">
                 <CardContent>
                   <Stack spacing={2}>
                     <Typography variant="h6">Passport Veicoli</Typography>
                     <Typography variant="body2" color="text.secondary">
-                      Vista dei passport registrati con stato interventi. Cerca per VIN o ID.
+                      Vista dei passport registrati con stato interventi. Cerca
+                      per VIN o ID.
                     </Typography>
                     <TextField
                       size="small"
@@ -817,21 +1087,30 @@ export default function App() {
                           {filteredPassports.length === 0 && (
                             <TableRow>
                               <TableCell colSpan={5}>
-                                <Typography variant="body2" color="text.secondary">
+                                <Typography
+                                  variant="body2"
+                                  color="text.secondary"
+                                >
                                   Nessun passport trovato.
                                 </Typography>
                               </TableCell>
                             </TableRow>
                           )}
                           {filteredPassports.map((vehicle) => (
-                            <TableRow key={`${vehicle.vin}-${vehicle.passportId}`}>
+                            <TableRow
+                              key={`${vehicle.vin}-${vehicle.passportId}`}
+                            >
                               <TableCell>{vehicle.vin}</TableCell>
                               <TableCell>
                                 {vehicle.make} {vehicle.model}
                               </TableCell>
                               <TableCell>{vehicle.year}</TableCell>
-                              <TableCell>{compactText(vehicle.passportId, 12, 10)}</TableCell>
-                              <TableCell align="right">{vehicle.interventions}</TableCell>
+                              <TableCell>
+                                {compactText(vehicle.passportId, 12, 10)}
+                              </TableCell>
+                              <TableCell align="right">
+                                {vehicle.interventions}
+                              </TableCell>
                             </TableRow>
                           ))}
                         </TableBody>

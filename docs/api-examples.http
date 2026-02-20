@@ -4,6 +4,17 @@ GET http://localhost:3000/api/health
 ### Config snapshot
 GET http://localhost:3000/api/config
 
+### Decode VIN (auto marca/modello)
+GET http://localhost:3000/api/utils/vin/WVWZZZ1JZXW000001
+
+### Hash documento da URI (supporta anche Google Drive condiviso)
+POST http://localhost:3000/api/utils/hash-from-uri
+Content-Type: application/json
+
+{
+  "uri": "https://www.google.com/robots.txt"
+}
+
 ### Register workshop
 POST http://localhost:3000/api/workshops
 Content-Type: application/json
