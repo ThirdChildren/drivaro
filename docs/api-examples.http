@@ -1,0 +1,44 @@
+### Health
+GET http://localhost:3000/api/health
+
+### Config snapshot
+GET http://localhost:3000/api/config
+
+### Register workshop
+POST http://localhost:3000/api/workshops
+Content-Type: application/json
+
+{
+  "workshopAddress": "0x9d6c2b5f4e22a30f7ad17f708f4b1c0aa6ad8d83",
+  "did": "did:iota:officina-roma-centro",
+  "publicKeyMultibase": "z6MkoYx3f6h1n8..."
+}
+
+### Mint vehicle passport
+POST http://localhost:3000/api/vehicles
+Content-Type: application/json
+
+{
+  "vin": "WVWZZZ1JZXW000001",
+  "make": "Volkswagen",
+  "model": "Golf",
+  "year": 2022,
+  "ownerAddress": "0x0d4fd9278f98b00d8e17f8ba09ea8a111f1937ab"
+}
+
+### Add intervention
+POST http://localhost:3000/api/vehicles/0xPASSPORT_ID/interventions
+Content-Type: application/json
+
+{
+  "odometerKm": 78214,
+  "workType": "Tagliando + sostituzione filtri",
+  "notesHash": "0x46a7f2f64d70ab26b2cf4e1795d8b19c6c0f7d8af0f5f10f6a7e6d8d10b2cb99",
+  "evidenceUri": "ipfs://bafybeifakecid/report-78214.pdf",
+  "workshopAddress": "0x9d6c2b5f4e22a30f7ad17f708f4b1c0aa6ad8d83",
+  "workshopSignature": "0x89ab7c...",
+  "recordedAtMs": 1739950000000
+}
+
+### Verify by VIN
+GET http://localhost:3000/api/vehicles/WVWZZZ1JZXW000001

@@ -1,0 +1,8 @@
+[package]
+name = "vehicle_passport_move"
+edition = "2024"
+
+[dependencies]
+
+[addresses]
+vehicle_passport_move = "0x0"
