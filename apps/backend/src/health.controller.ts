@@ -6,7 +6,7 @@ export class HealthController {
   status() {
     return {
       status: 'ok',
-      service: 'iota-auto-passport-backend',
+      service: 'drivaro-backend',
       time: new Date().toISOString(),
     };
   }

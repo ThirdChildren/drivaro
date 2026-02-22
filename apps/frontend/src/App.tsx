@@ -538,10 +538,10 @@ export default function App() {
                 </Box>
                 <Box>
                   <Typography variant="subtitle1" className="font-semibold">
-                    Auto Passport
+                    Drivaro
                   </Typography>
                   <Typography variant="caption" color="text.secondary">
-                    IOTA Registry
+                    Vehicle Trust Registry
                   </Typography>
                 </Box>
               </Stack>
@@ -629,7 +629,7 @@ export default function App() {
                     <DirectionsCarRounded fontSize="large" />
                   </Box>
                   <Box flex={1}>
-                    <Typography variant="h3">IOTA Auto Passport</Typography>
+                    <Typography variant="h3">Drivaro</Typography>
                     <Typography variant="body1" className="mt-2">
                       Tamper-proof maintenance log: the workshop signs each
                       intervention, the evidence is hashed, and buyers can

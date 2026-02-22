@@ -1,4 +1,4 @@
-# IOTA Auto Passport
+# Drivaro
 
 Tamper-proof vehicle maintenance registry on IOTA.
 
@@ -18,7 +18,7 @@ Prevent odometer rollback and fake maintenance history with:
 ## Project Structure
 
 ```txt
-iota-auto-passport/
+drivaro/
   apps/
     backend/                 # NestJS API (on-chain read/index + utilities)
     frontend/                # Workshop + buyer dashboard

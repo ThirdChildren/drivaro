@@ -1,8 +1,8 @@
 {
-  "name": "iota-auto-passport",
+  "name": "drivaro",
   "version": "0.1.0",
   "private": true,
-  "description": "Registro riparazioni auto anti-manomissione km su IOTA",
+  "description": "Drivaro - tamper-proof vehicle maintenance history on IOTA",
   "workspaces": [
     "apps/backend",
     "apps/frontend"

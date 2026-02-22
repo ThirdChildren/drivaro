@@ -244,7 +244,7 @@ export class RecordsService {
       response = await fetch(resolvedUri, {
         redirect: 'follow',
         headers: {
-          'User-Agent': 'iota-auto-passport/1.0',
+          'User-Agent': 'drivaro/1.0',
         },
       });
     } catch {
