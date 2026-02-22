@@ -3,8 +3,10 @@ import {
   useCurrentAccount,
   useCurrentWallet,
   useDisconnectWallet,
+  useSignAndExecuteTransaction,
   useSignPersonalMessage,
 } from "@iota/dapp-kit";
+import { Transaction } from "@iota/iota-sdk/transactions";
 import AccountBalanceWalletRounded from "@mui/icons-material/AccountBalanceWalletRounded";
 import DirectionsCarRounded from "@mui/icons-material/DirectionsCarRounded";
 import EngineeringRounded from "@mui/icons-material/EngineeringRounded";
@@ -33,14 +35,12 @@ import {
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
 import {
-  addIntervention,
-  createVehicle,
   decodeVin,
+  fetchConfig,
   fetchVehicleByVin,
   fetchVehicles,
   fetchWorkshops,
   hashFromUri,
-  registerWorkshop,
 } from "./api";
 
 interface VehicleSummary {
@@ -79,6 +79,11 @@ interface VehicleHistory {
   passportId: string;
   interventions: HistoryIntervention[];
   verified: boolean;
+}
+
+interface ChainConfig {
+  packageId: string;
+  registryId: string;
 }
 
 type AppSection =
@@ -141,13 +146,14 @@ function formatDate(isoDate: string): string {
     return isoDate;
   }
 
-  return date.toLocaleString("it-IT");
+  return date.toLocaleString("en-US");
 }
 
 export default function App() {
   const currentAccount = useCurrentAccount();
   const currentWallet = useCurrentWallet();
   const disconnectWallet = useDisconnectWallet();
+  const signAndExecuteTransaction = useSignAndExecuteTransaction();
   const signPersonalMessage = useSignPersonalMessage();
 
   const [vehicles, setVehicles] = useState<VehicleSummary[]>([]);
@@ -171,6 +177,7 @@ export default function App() {
     recordedAtMs: number;
     signature: string;
   } | null>(null);
+  const [chainConfig, setChainConfig] = useState<ChainConfig | null>(null);
 
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -211,14 +218,19 @@ export default function App() {
 
   const loadDashboard = async () => {
     try {
-      const [vehicleList, workshopList] = await Promise.all([
+      const [vehicleList, workshopList, config] = await Promise.all([
         fetchVehicles(),
         fetchWorkshops(),
+        fetchConfig(),
       ]);
       setVehicles(vehicleList);
       setWorkshops(workshopList);
+      setChainConfig({
+        packageId: config.packageId,
+        registryId: config.registryId,
+      });
     } catch {
-      setError("Impossibile caricare la dashboard dal backend.");
+      setError("Unable to load dashboard data from backend.");
     }
   };
 
@@ -315,24 +327,51 @@ export default function App() {
   const onWorkshopSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setError(null);
+
+    if (!currentAccount || !currentWallet.isConnected) {
+      setError("Connect your IOTA wallet before registering a workshop.");
+      return;
+    }
+
+    if (!chainConfig?.packageId || !chainConfig.registryId) {
+      setError("Missing on-chain configuration (package/registry IDs).");
+      return;
+    }
+
+    const normalizedAddress = workshopForm.workshopAddress.trim().toLowerCase();
+    const did = workshopForm.did.trim() || buildDid(normalizedAddress);
+
     try {
-      const onboardedWorkshop = await registerWorkshop(workshopForm);
-      setMessage(
-        "Officina registrata on-chain e pronta alla firma interventi.",
-      );
-      setWorkshops((prev) => {
-        const withoutDuplicate = prev.filter(
-          (workshop) =>
-            workshop.workshopAddress.toLowerCase() !==
-            onboardedWorkshop.workshopAddress.toLowerCase(),
-        );
-        return [...withoutDuplicate, onboardedWorkshop];
+      const tx = new Transaction();
+      tx.moveCall({
+        target: `${chainConfig.packageId}::vehicle_passport::register_workshop`,
+        arguments: [
+          tx.object(chainConfig.registryId),
+          tx.pure.address(normalizedAddress),
+          tx.pure.string(did),
+          tx.pure.string(workshopForm.publicKeyMultibase),
+        ],
       });
+
+      await signAndExecuteTransaction.mutateAsync({
+        transaction: tx,
+        account: currentAccount,
+        waitForTransaction: true,
+      });
+
+      setMessage(
+        "Workshop registration submitted on-chain from your connected wallet.",
+      );
       setActiveSection("workshops");
-      setWorkshopForm(initialWorkshop);
+      setWorkshopForm({
+        workshopAddress: currentAccount.address.toLowerCase(),
+        did: buildDid(currentAccount.address.toLowerCase()),
+        publicKeyMultibase: bytesToMultibaseBase64(currentAccount.publicKey),
+      });
+      await loadDashboard();
     } catch {
       setError(
-        "Registrazione officina fallita. Controlla package/registry ID e wallet CLI.",
+        "Workshop registration failed on-chain. If this registry is admin-gated, use the admin wallet or deploy your own package/registry.",
       );
     }
   };
@@ -340,14 +379,48 @@ export default function App() {
   const onVehicleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setError(null);
+
+    if (!currentAccount || !currentWallet.isConnected) {
+      setError("Connect your IOTA wallet before minting a passport.");
+      return;
+    }
+
+    if (!chainConfig?.packageId || !chainConfig.registryId) {
+      setError("Missing on-chain configuration (package/registry IDs).");
+      return;
+    }
+
     try {
-      await createVehicle(vehicleForm);
-      setMessage("Passport veicolo creato e tokenizzato su IOTA.");
+      const tx = new Transaction();
+      tx.moveCall({
+        target: `${chainConfig.packageId}::vehicle_passport::mint_vehicle_passport`,
+        arguments: [
+          tx.object(chainConfig.registryId),
+          tx.pure.string(vehicleForm.vin.trim().toUpperCase()),
+          tx.pure.string(vehicleForm.make.trim()),
+          tx.pure.string(vehicleForm.model.trim()),
+          tx.pure.u64(Number(vehicleForm.year)),
+          tx.pure.address(vehicleForm.ownerAddress.trim().toLowerCase()),
+        ],
+      });
+
+      await signAndExecuteTransaction.mutateAsync({
+        transaction: tx,
+        account: currentAccount,
+        waitForTransaction: true,
+      });
+
+      setMessage("Vehicle passport minted and tokenized on IOTA.");
       setActiveSection("passports");
-      setVehicleForm(initialVehicle);
+      setVehicleForm({
+        ...initialVehicle,
+        ownerAddress: currentAccount.address.toLowerCase(),
+      });
       await loadDashboard();
     } catch {
-      setError("Creazione passport fallita.");
+      setError(
+        "Passport mint failed on-chain. If this registry is admin-gated, use the admin wallet or deploy your own package/registry.",
+      );
     }
   };
 
@@ -357,7 +430,12 @@ export default function App() {
     setAutoInterventionInfo(null);
 
     if (!currentAccount || !currentWallet.isConnected) {
-      setError("Per notarizzare l’intervento collega prima il wallet IOTA.");
+      setError("Connect your IOTA wallet before notarizing an intervention.");
+      return;
+    }
+
+    if (!chainConfig?.packageId || !chainConfig.registryId) {
+      setError("Missing on-chain configuration (package/registry IDs).");
       return;
     }
 
@@ -366,7 +444,7 @@ export default function App() {
       .toLowerCase();
     if (normalizedWorkshopAddress !== currentAccount.address.toLowerCase()) {
       setError(
-        "L’indirizzo officina deve coincidere con l’account wallet connesso per firmare.",
+        "Workshop address must match the connected wallet account used for signing.",
       );
       return;
     }
@@ -391,14 +469,25 @@ export default function App() {
         message: new TextEncoder().encode(payloadToSign),
       });
 
-      await addIntervention(interventionForm.passportId, {
-        odometerKm: Number(interventionForm.odometerKm),
-        workType: interventionForm.workType,
-        notesHash: hashResult.notesHash,
-        evidenceUri: interventionForm.evidenceUri,
-        workshopAddress: normalizedWorkshopAddress,
-        workshopSignature: `base64:${signatureResult.signature}`,
-        recordedAtMs,
+      const tx = new Transaction();
+      tx.moveCall({
+        target: `${chainConfig.packageId}::vehicle_passport::record_intervention`,
+        arguments: [
+          tx.object(chainConfig.registryId),
+          tx.object(interventionForm.passportId.trim()),
+          tx.pure.u64(Number(interventionForm.odometerKm)),
+          tx.pure.string(interventionForm.workType.trim()),
+          tx.pure.string(hashResult.notesHash),
+          tx.pure.string(interventionForm.evidenceUri.trim()),
+          tx.pure.string(`base64:${signatureResult.signature}`),
+          tx.pure.u64(recordedAtMs),
+        ],
+      });
+
+      await signAndExecuteTransaction.mutateAsync({
+        transaction: tx,
+        account: currentAccount,
+        waitForTransaction: true,
       });
 
       setAutoInterventionInfo({
@@ -407,13 +496,16 @@ export default function App() {
         signature: `base64:${signatureResult.signature}`,
       });
       setMessage(
-        "Intervento notarizzato: chilometraggio bloccato in sequenza crescente.",
+        "Intervention notarized: odometer locked in a non-decreasing sequence.",
       );
-      setInterventionForm(initialIntervention);
+      setInterventionForm({
+        ...initialIntervention,
+        workshopAddress: currentAccount.address.toLowerCase(),
+      });
       await loadDashboard();
     } catch {
       setError(
-        "Registrazione intervento fallita. Verifica autorizzazione officina e km.",
+        "Intervention registration failed. Verify workshop authorization and odometer value.",
       );
     } finally {
       setProcessingIntervention(false);
@@ -430,7 +522,7 @@ export default function App() {
       setMessage(null);
     } catch {
       setHistory(null);
-      setError("VIN non trovato o cronologia non disponibile.");
+      setError("VIN not found or history unavailable.");
     }
   };
 
@@ -457,7 +549,7 @@ export default function App() {
               <Divider />
 
               <Typography variant="caption" color="text.secondary">
-                OPERAZIONI
+                OPERATIONS
               </Typography>
               <Button
                 fullWidth
@@ -466,7 +558,7 @@ export default function App() {
                 onClick={() => setActiveSection("onboarding")}
                 sx={{ justifyContent: "flex-start", textTransform: "none" }}
               >
-                Onboarding Officina
+                Workshop Onboarding
               </Button>
               <Button
                 fullWidth
@@ -487,7 +579,7 @@ export default function App() {
                 onClick={() => setActiveSection("intervention")}
                 sx={{ justifyContent: "flex-start", textTransform: "none" }}
               >
-                Notarizza Intervento
+                Notarize Intervention
               </Button>
               <Button
                 fullWidth
@@ -495,13 +587,13 @@ export default function App() {
                 onClick={() => setActiveSection("verify")}
                 sx={{ justifyContent: "flex-start", textTransform: "none" }}
               >
-                Verifica VIN
+                Verify VIN
               </Button>
 
               <Divider />
 
               <Typography variant="caption" color="text.secondary">
-                REGISTRI
+                REGISTRIES
               </Typography>
               <Button
                 fullWidth
@@ -509,7 +601,7 @@ export default function App() {
                 onClick={() => setActiveSection("workshops")}
                 sx={{ justifyContent: "space-between", textTransform: "none" }}
               >
-                Officine
+                Workshops
                 <Chip size="small" label={workshops.length} />
               </Button>
               <Button
@@ -519,7 +611,7 @@ export default function App() {
                 onClick={() => setActiveSection("passports")}
                 sx={{ justifyContent: "space-between", textTransform: "none" }}
               >
-                Passport
+                Passports
                 <Chip size="small" label={vehicles.length} />
               </Button>
             </Stack>
@@ -539,18 +631,19 @@ export default function App() {
                   <Box flex={1}>
                     <Typography variant="h3">IOTA Auto Passport</Typography>
                     <Typography variant="body1" className="mt-2">
-                      Diario manutenzione non cancellabile: officina firma, hash
-                      intervento, cronologia verificabile prima dell’acquisto.
+                      Tamper-proof maintenance log: the workshop signs each
+                      intervention, the evidence is hashed, and buyers can
+                      verify full history before purchase.
                     </Typography>
                   </Box>
                   <Stack direction="row" spacing={1}>
                     <Chip
-                      label={`${workshopCount} officine`}
+                      label={`${workshopCount} workshops`}
                       variant="outlined"
                     />
-                    <Chip label={`${vehicleCount} veicoli`} color="primary" />
+                    <Chip label={`${vehicleCount} vehicles`} color="primary" />
                     <Chip
-                      label={`${interventionCount} interventi`}
+                      label={`${interventionCount} interventions`}
                       color="secondary"
                     />
                   </Stack>
@@ -571,19 +664,19 @@ export default function App() {
                     <Stack direction="row" spacing={1} alignItems="center">
                       <EngineeringRounded color="primary" />
                       <Typography variant="h6">
-                        Onboarding Officina (Identity)
+                        Workshop Onboarding (Identity)
                       </Typography>
                     </Stack>
                     <Typography variant="body2" color="text.secondary">
-                      Wallet connect auto-compila address, DID e public key. Il
-                      DID resta editabile se vuoi una convenzione diversa.
+                      Wallet connect auto-fills address, DID and public key.
+                      DID remains editable if you want a custom convention.
                     </Typography>
                     <Stack
                       direction={{ xs: "column", sm: "row" }}
                       spacing={1}
                       alignItems={{ xs: "stretch", sm: "center" }}
                     >
-                      <ConnectButton connectText="Connetti Wallet IOTA" />
+                      <ConnectButton connectText="Connect IOTA Wallet" />
                       {currentWallet.isConnected && (
                         <Button
                           variant="outlined"
@@ -591,14 +684,14 @@ export default function App() {
                           startIcon={<LogoutRounded />}
                           onClick={() => disconnectWallet.mutate()}
                         >
-                          Disconnetti
+                          Disconnect
                         </Button>
                       )}
                     </Stack>
                     <Stack direction="row" spacing={1} flexWrap="wrap">
                       <Chip
                         icon={<AccountBalanceWalletRounded />}
-                        label={`Rete: ${iotaNetwork}`}
+                        label={`Network: ${iotaNetwork}`}
                       />
                       <Chip
                         color={
@@ -606,15 +699,15 @@ export default function App() {
                         }
                         label={
                           currentWallet.isConnected
-                            ? "Wallet connesso"
-                            : "Wallet non connesso"
+                            ? "Wallet connected"
+                            : "Wallet disconnected"
                         }
                       />
                     </Stack>
                     <form className="space-y-3" onSubmit={onWorkshopSubmit}>
                       <TextField
                         fullWidth
-                        label="Address Officina"
+                        label="Workshop Address"
                         value={workshopForm.workshopAddress}
                         onChange={(event) =>
                           setWorkshopForm((prev) => ({
@@ -629,7 +722,7 @@ export default function App() {
                         value={workshopForm.did}
                         helperText={
                           currentAccount
-                            ? "Generato dal wallet, puoi personalizzarlo."
+                            ? "Generated from wallet, you can customize it."
                             : ""
                         }
                         onChange={(event) =>
@@ -645,7 +738,7 @@ export default function App() {
                         value={workshopForm.publicKeyMultibase}
                         helperText={
                           currentAccount
-                            ? "Derivata dalla public key del wallet."
+                            ? "Derived from wallet public key."
                             : ""
                         }
                         onChange={(event) =>
@@ -656,7 +749,7 @@ export default function App() {
                         }
                       />
                       <Button type="submit" fullWidth variant="contained">
-                        Registra Officina
+                        Register Workshop
                       </Button>
                     </form>
                   </Stack>
@@ -671,7 +764,7 @@ export default function App() {
                     <Stack direction="row" spacing={1} alignItems="center">
                       <TimelineRounded color="secondary" />
                       <Typography variant="h6">
-                        Mint Passport Veicolo
+                        Mint Vehicle Passport
                       </Typography>
                     </Stack>
                     <form className="space-y-3" onSubmit={onVehicleSubmit}>
@@ -681,12 +774,12 @@ export default function App() {
                         value={vehicleForm.vin}
                         helperText={
                           vinLookupState === "loading"
-                            ? "Ricerca marca/modello in corso..."
+                            ? "Looking up make/model..."
                             : vinLookupState === "done"
-                              ? "Marca e modello compilati automaticamente dal VIN."
+                              ? "Make and model auto-filled from VIN."
                               : vinLookupState === "error"
-                                ? "Lookup VIN non disponibile o VIN non riconosciuto."
-                                : "Inserisci un VIN completo (17 caratteri) per l’autofill."
+                                ? "VIN lookup unavailable or VIN not recognized."
+                                : "Enter a full VIN (17 chars) for auto-fill."
                         }
                         onChange={(event) =>
                           setVehicleForm((prev) => ({
@@ -701,7 +794,7 @@ export default function App() {
                       >
                         <TextField
                           fullWidth
-                          label="Marca"
+                          label="Make"
                           value={vehicleForm.make}
                           onChange={(event) =>
                             setVehicleForm((prev) => ({
@@ -712,7 +805,7 @@ export default function App() {
                         />
                         <TextField
                           fullWidth
-                          label="Modello"
+                          label="Model"
                           value={vehicleForm.model}
                           onChange={(event) =>
                             setVehicleForm((prev) => ({
@@ -729,7 +822,7 @@ export default function App() {
                         <TextField
                           fullWidth
                           type="number"
-                          label="Anno"
+                          label="Year"
                           value={vehicleForm.year}
                           onChange={(event) =>
                             setVehicleForm((prev) => ({
@@ -756,7 +849,7 @@ export default function App() {
                         variant="contained"
                         color="secondary"
                       >
-                        Crea Passport
+                        Create Passport
                       </Button>
                     </form>
                   </Stack>
@@ -770,7 +863,7 @@ export default function App() {
                   <Stack spacing={2}>
                     <Stack direction="row" spacing={1} alignItems="center">
                       <FactCheckRounded color="primary" />
-                      <Typography variant="h6">Notarizza Intervento</Typography>
+                      <Typography variant="h6">Notarize Intervention</Typography>
                     </Stack>
                     <form className="space-y-3" onSubmit={onInterventionSubmit}>
                       <Stack
@@ -807,7 +900,7 @@ export default function App() {
                       >
                         <TextField
                           fullWidth
-                          label="Tipo Intervento"
+                          label="Intervention Type"
                           value={interventionForm.workType}
                           onChange={(event) =>
                             setInterventionForm((prev) => ({
@@ -824,7 +917,7 @@ export default function App() {
                         <TextField
                           fullWidth
                           label="Evidence URI (IPFS/S3)"
-                          helperText="Supporta anche link Google Drive condivisi (file accessibile)."
+                          helperText="Also supports shared Google Drive links (publicly accessible file)."
                           value={interventionForm.evidenceUri}
                           onChange={(event) =>
                             setInterventionForm((prev) => ({
@@ -835,7 +928,7 @@ export default function App() {
                         />
                         <TextField
                           fullWidth
-                          label="Address Officina"
+                          label="Workshop Address"
                           value={interventionForm.workshopAddress}
                           onChange={(event) =>
                             setInterventionForm((prev) => ({
@@ -851,8 +944,8 @@ export default function App() {
                         disabled={processingIntervention}
                       >
                         {processingIntervention
-                          ? "Notarizzazione in corso..."
-                          : "Registra Intervento"}
+                          ? "Notarizing..."
+                          : "Record Intervention"}
                       </Button>
                     </form>
                     {autoInterventionInfo && (
@@ -860,7 +953,7 @@ export default function App() {
                         <CardContent>
                           <Stack spacing={0.7}>
                             <Typography variant="subtitle2">
-                              Dati auto-generati ultimo intervento
+                              Auto-generated data for latest intervention
                             </Typography>
                             <Typography
                               variant="caption"
@@ -904,7 +997,7 @@ export default function App() {
                 <CardContent>
                   <Stack spacing={2}>
                     <Typography variant="h6">
-                      Verifica Cronologia (Buyer Check)
+                      Verify History (Buyer Check)
                     </Typography>
                     <form
                       onSubmit={onVerifySubmit}
@@ -912,14 +1005,14 @@ export default function App() {
                     >
                       <TextField
                         fullWidth
-                        label="Inserisci VIN"
+                        label="Enter VIN"
                         value={searchVin}
                         onChange={(event) =>
                           setSearchVin(event.target.value.toUpperCase())
                         }
                       />
                       <Button type="submit" variant="outlined">
-                        Verifica
+                        Verify
                       </Button>
                     </form>
 
@@ -937,8 +1030,8 @@ export default function App() {
                           <Chip
                             label={
                               history.verified
-                                ? "Cronologia coerente"
-                                : "Anomalia rilevata"
+                                ? "History consistent"
+                                : "Anomaly detected"
                             }
                             color={history.verified ? "success" : "error"}
                           />
@@ -960,8 +1053,8 @@ export default function App() {
                                     #{item.seq} - {item.workType}
                                   </Typography>
                                   <Typography variant="body2">
-                                    Km: <strong>{item.odometerKm}</strong> |
-                                    Officina: {item.workshopAddress}
+                                    Odometer: <strong>{item.odometerKm}</strong>{" "}
+                                    | Workshop: {item.workshopAddress}
                                   </Typography>
                                   <Typography
                                     variant="body2"
@@ -991,15 +1084,15 @@ export default function App() {
               <Card className="shadow-card">
                 <CardContent>
                   <Stack spacing={2}>
-                    <Typography variant="h6">Officine Onboardate</Typography>
+                    <Typography variant="h6">Onboarded Workshops</Typography>
                     <Typography variant="body2" color="text.secondary">
-                      Elenco completo officine registrate. Cerca per address,
-                      DID o public key.
+                      Full list of registered workshops. Search by address, DID
+                      or public key.
                     </Typography>
                     <TextField
                       size="small"
                       fullWidth
-                      label="Cerca officina (address, DID, public key)"
+                      label="Search workshop (address, DID, public key)"
                       value={workshopQuery}
                       onChange={(event) => setWorkshopQuery(event.target.value)}
                     />
@@ -1021,7 +1114,7 @@ export default function App() {
                                   variant="body2"
                                   color="text.secondary"
                                 >
-                                  Nessuna officina trovata.
+                                  No workshops found.
                                 </Typography>
                               </TableCell>
                             </TableRow>
@@ -1060,15 +1153,15 @@ export default function App() {
               <Card className="shadow-card">
                 <CardContent>
                   <Stack spacing={2}>
-                    <Typography variant="h6">Passport Veicoli</Typography>
+                    <Typography variant="h6">Vehicle Passports</Typography>
                     <Typography variant="body2" color="text.secondary">
-                      Vista dei passport registrati con stato interventi. Cerca
-                      per VIN o ID.
+                      View of registered passports with intervention status.
+                      Search by VIN or passport ID.
                     </Typography>
                     <TextField
                       size="small"
                       fullWidth
-                      label="Cerca passport (VIN, marca, modello, passport ID)"
+                      label="Search passport (VIN, make, model, passport ID)"
                       value={passportQuery}
                       onChange={(event) => setPassportQuery(event.target.value)}
                     />
@@ -1077,10 +1170,10 @@ export default function App() {
                         <TableHead>
                           <TableRow>
                             <TableCell>VIN</TableCell>
-                            <TableCell>Veicolo</TableCell>
-                            <TableCell>Anno</TableCell>
+                            <TableCell>Vehicle</TableCell>
+                            <TableCell>Year</TableCell>
                             <TableCell>Passport ID</TableCell>
-                            <TableCell align="right">Interventi</TableCell>
+                            <TableCell align="right">Interventions</TableCell>
                           </TableRow>
                         </TableHead>
                         <TableBody>
@@ -1091,7 +1184,7 @@ export default function App() {
                                   variant="body2"
                                   color="text.secondary"
                                 >
-                                  Nessun passport trovato.
+                                  No passports found.
                                 </Typography>
                               </TableCell>
                             </TableRow>

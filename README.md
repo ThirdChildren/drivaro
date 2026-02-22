@@ -1,13 +1,13 @@
 # IOTA Auto Passport
 
-Registro riparazioni auto anti-manomissione chilometri su IOTA.
+Tamper-proof vehicle maintenance registry on IOTA.
 
-## Obiettivo
+## Goal
 
-Bloccare le frodi di scalatura km e storico manutenzione falso con:
-- `notarization`: hash e firma digitale di ogni intervento
-- `digital identity`: officine autorizzate via DID + public key
-- `tokenization`: un passport on-chain (oggetto Move) per ogni auto
+Prevent odometer rollback and fake maintenance history with:
+- `notarization`: hash + digital signature for each intervention
+- `digital identity`: authorized workshops via DID + public key
+- `tokenization`: one on-chain passport object per vehicle
 
 ## Stack
 
@@ -15,32 +15,34 @@ Bloccare le frodi di scalatura km e storico manutenzione falso con:
 - Backend: NestJS + TypeScript
 - Frontend: React + TypeScript + Tailwind + MUI
 
-## Struttura
+## Project Structure
 
 ```txt
 iota-auto-passport/
   apps/
-    backend/                 # API NestJS e bridge verso iota CLI
-    frontend/                # Dashboard UX officina + buyer verification
+    backend/                 # NestJS API (on-chain read/index + utilities)
+    frontend/                # Workshop + buyer dashboard
   contracts/
-    vehicle_passport_move/   # Smart contract Move
+    vehicle_passport_move/   # Move smart contract
   scripts/
-    iota-deploy.sh           # Publish package e extraction package/registry ID
+    iota-deploy.sh           # Publish package and extract package/registry IDs
 ```
 
 ## Smart Contract (Move)
 
 Path: `contracts/vehicle_passport_move/sources/vehicle_passport.move`
 
-Entità principali:
-- `Registry` (shared object): admin + elenco officine autorizzate
-- `VehiclePassport` (tokenized object): identità veicolo + storico interventi
-- `ServiceIntervention`: intervento append-only con km, hash, firma e timestamp
+Main entities:
+- `Registry` (shared object): admin + authorized workshops
+- `VehiclePassport` (tokenized object): vehicle identity + intervention history
+- `ServiceIntervention`: append-only intervention record with odometer, hash, signature, timestamp
 
-Regole anti-manomissione:
-- solo officine attive possono registrare interventi
-- `odometer_km` deve essere sempre crescente (`no rollback`)
-- storico interventi append-only dentro il passport
+Anti-tampering rules:
+- workshop onboarding requires `workshop == tx sender`
+- passport mint requires `owner == tx sender`
+- only active workshops can record interventions
+- `odometer_km` must be non-decreasing (`no rollback`)
+- interventions are append-only inside the passport object
 
 ### Build/Test Move
 
@@ -50,9 +52,9 @@ iota move build
 iota move test
 ```
 
-## Deploy su IOTA con CLI
+## Deploy Contract with CLI
 
-### Prerequisiti wallet/CLI
+### Prerequisites
 
 ```bash
 iota --version
@@ -61,21 +63,21 @@ iota client active-address
 
 ### Publish package
 
-Da root progetto:
+From project root:
 
 ```bash
 ./scripts/iota-deploy.sh
 ```
 
-Lo script salva output in `docs/publish-output.json` e stampa:
+The script stores output in `docs/publish-output.json` and prints:
 - `IOTA_PACKAGE_ID`
 - `IOTA_REGISTRY_ID`
 
-## Backend NestJS
+## Backend (NestJS)
 
 Path: `apps/backend`
 
-### API principali
+### Main APIs
 - `POST /api/contracts/publish`
 - `POST /api/workshops`
 - `GET /api/workshops`
@@ -83,54 +85,69 @@ Path: `apps/backend`
 - `GET /api/vehicles`
 - `GET /api/vehicles/:vin`
 - `POST /api/vehicles/:passportId/interventions`
+- `GET /api/utils/vin/:vin`
+- `POST /api/utils/hash-from-uri`
 
-Il backend usa `iota client call` per invocare:
-- `register_workshop`
-- `mint_vehicle_passport`
-- `record_intervention`
+The backend uses `@iota/iota-sdk` to:
+- read workshops and passports directly from on-chain data (events + objects)
+- serve VIN decode and evidence hashing utilities
+- expose config for frontend transaction building
+
+### Signer Configuration (Optional)
+
+Core demo flow is wallet-signed from frontend, so backend private keys are not required.
+
+Only if you want backend-signed write endpoints, set:
+- `IOTA_ADMIN_PRIVATE_KEY`: admin signer for `register_workshop` and `mint_vehicle_passport`
+- `IOTA_WORKSHOP_PRIVATE_KEYS_JSON`: optional map `{"0xworkshopAddress":"privateKeyOrMnemonic"}` for workshop-side `record_intervention`
+- `IOTA_RPC_URL`: optional fullnode URL (defaults from `IOTA_NETWORK`)
 
 ## Frontend
 
 Path: `apps/frontend`
 
-Dashboard con 4 aree:
-- onboarding officina (identity)
-- mint passport veicolo (tokenization)
-- notarizzazione intervento (hash + signature)
-- verifica buyer su VIN con timeline cronologica
+Dashboard areas:
+- workshop onboarding (identity)
+- vehicle passport mint (tokenization)
+- intervention notarization (hash + signature)
+- buyer VIN verification (timeline)
+- searchable registries (workshops and passports)
 
-### Onboarding automatizzato
+### Automated Onboarding
 
-- Wallet connect IOTA integrato (`@iota/dapp-kit`)
-- `Address Officina` e `Public Key` vengono auto-compilati dal wallet connesso
-- `DID` viene auto-generato con convenzione `did:iota:<network>:<address>` (modificabile da UI)
-- `Marca` e `Modello` vengono auto-risolti dal VIN (servizio decode VIN)
-- in notarizzazione: hash documento, firma digitale wallet e timestamp sono auto-generati al submit
-- supporto URI documento anche da Google Drive (file accessibile via link condiviso)
+- IOTA wallet connect integrated (`@iota/dapp-kit`)
+- workshop address + public key auto-filled from connected wallet
+- DID auto-generated as `did:iota:<network>:<address>` (editable)
+- workshop onboarding/mint/intervention transactions are signed from the connected wallet
+- make/model auto-filled from VIN lookup
+- intervention flow auto-computes timestamp, evidence hash, and wallet signature
+- Google Drive shared links are supported for evidence hashing
 
-## Setup locale
+## Local Setup
 
-1. Installa dipendenze
+1. Install dependencies
 
 ```bash
 npm install
 ```
 
-2. Crea env da template
+2. Create env file
 
 ```bash
 cp .env.example .env
 ```
 
-3. Inserisci in `.env` i valori dal deploy
+3. Fill `.env`
 
 ```env
+IOTA_NETWORK=testnet
 IOTA_PACKAGE_ID=0x...
 IOTA_REGISTRY_ID=0x...
+VITE_API_URL=http://localhost:3000/api
 VITE_IOTA_NETWORK=testnet
 ```
 
-4. Avvio servizi
+4. Run services
 
 ```bash
 npm run dev:backend
@@ -140,8 +157,17 @@ npm run dev:frontend
 Frontend: `http://localhost:5173`
 Backend: `http://localhost:3000/api`
 
-## Note operative
+## Production Architecture Notes
 
-- In questo scaffold il backend conserva anche uno stato off-chain in memoria per UX veloce.
-- Per produzione conviene aggiungere DB persistente (PostgreSQL) e indicizzazione eventi on-chain.
-- Le firme e gli hash sono accettati come stringhe codificate (hex/base64/multibase).
+### Wallet-Signed Transaction Model
+
+The recommended mode for public demos/hackathons:
+- each workshop signs and sends transactions with its own IOTA wallet
+- backend does not need workshop private keys
+- backend remains focused on utilities, indexing and verification APIs
+
+## Operational Notes
+
+- Backend uses short-lived cache for event/object reads to keep dashboard responsive.
+- For production, add persistent storage (PostgreSQL) and on-chain event indexing.
+- Hashes and signatures are stored as encoded strings (hex/base64/multibase).

@@ -46,9 +46,16 @@ export interface HashFromUriResult {
   sizeBytes: number;
 }
 
+export interface BackendConfigResult {
+  packageId: string;
+  registryId: string;
+  network: string;
+}
+
 export const fetchVehicles = async () => (await api.get('/vehicles')).data;
 export const fetchVehicleByVin = async (vin: string) => (await api.get(`/vehicles/${vin}`)).data;
 export const fetchWorkshops = async () => (await api.get('/workshops')).data;
+export const fetchConfig = async (): Promise<BackendConfigResult> => (await api.get('/config')).data;
 
 export const registerWorkshop = async (payload: WorkshopPayload) =>
   (await api.post('/workshops', payload)).data;

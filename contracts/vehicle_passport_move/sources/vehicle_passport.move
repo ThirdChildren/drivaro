@@ -7,6 +7,7 @@ const E_NOT_ADMIN: u64 = 1;
 const E_WORKSHOP_NOT_ACTIVE: u64 = 2;
 const E_ODOMETER_ROLLBACK: u64 = 3;
 const E_ZERO_VALUE: u64 = 4;
+const E_UNAUTHORIZED_SENDER: u64 = 5;
 
 public struct Registry has key {
     id: UID,
@@ -86,7 +87,7 @@ public entry fun register_workshop(
     public_key_multibase: String,
     ctx: &mut TxContext,
 ) {
-    assert_admin(registry, ctx);
+    assert!(workshop == tx_context::sender(ctx), E_UNAUTHORIZED_SENDER);
     vector::push_back(
         &mut registry.workshops,
         WorkshopIdentity {
@@ -121,7 +122,7 @@ public entry fun mint_vehicle_passport(
     owner: address,
     ctx: &mut TxContext,
 ) {
-    assert_admin(registry, ctx);
+    assert!(owner == tx_context::sender(ctx), E_UNAUTHORIZED_SENDER);
     assert!(year > 0, E_ZERO_VALUE);
 
     let passport = VehiclePassport {
